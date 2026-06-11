@@ -1,42 +1,74 @@
-import openmeteo_requests
+import sys
+import requests
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QPushButton, QLineEdit, QMessageBox
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
 
-import pandas as pd
-import requests_cache
-from retry_requests import retry
+load_dotenv()
 
-# Setup the Open-Meteo API client with cache and retry on error
-cache_session = requests_cache.CachedSession('.cache', expire_after = 3600)
-retry_session = retry(cache_session, retries = 5, backoff_factor = 0.2)
-openmeteo = openmeteo_requests.Client(session = retry_session)
+BASE_DIR = Path(__file__).resolve().parent
+ICON_PATH = BASE_DIR / "icon.ico"
 
-# Make sure all required weather variables are listed here
-# The order of variables in hourly or daily is important to assign them correctly below
-url = "https://api.open-meteo.com/v1/forecast"
-params = {
-	"latitude": -5.0892,
-	"longitude": -42.8019,
-	"hourly": "temperature_2m",
-}
-responses = openmeteo.weather_api(url, params=params)
+class WeatherReport(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Weather Report")
+        self.setGeometry(100, 100, 400, 300)
 
-# Process first location. Add a for-loop for multiple locations or weather models
-response = responses[0]
-print(f"Coordinates: {response.Latitude()}°N {response.Longitude()}°E")
-print(f"Elevation: {response.Elevation()} m asl")
-print(f"Timezone difference to GMT+0: {response.UtcOffsetSeconds()}s")
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
 
-# Process hourly data. The order of variables needs to be the same as requested.
-hourly = response.Hourly()
-hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
+        self.layout = QVBoxLayout()
 
-hourly_data = {"date": pd.date_range(
-	start = pd.to_datetime(hourly.Time(), unit = "s", utc = True),
-	end =  pd.to_datetime(hourly.TimeEnd(), unit = "s", utc = True),
-	freq = pd.Timedelta(seconds = hourly.Interval()),
-	inclusive = "left"
-)}
+        self.city_input = QLineEdit(self)
+        self.city_input.setPlaceholderText("Nome da Cidade")
+        self.layout.addWidget(self.city_input)
 
-hourly_data["temperature_2m"] = hourly_temperature_2m
+        self.get_weather_button = QPushButton("Obter Previsão do Tempo", self)
+        self.get_weather_button.clicked.connect(self.get_weather)
+        self.layout.addWidget(self.get_weather_button)
 
-hourly_dataframe = pd.DataFrame(data = hourly_data)
-print("\nHourly data\n", hourly_dataframe)
+        self.weather_label = QLabel("", self)
+        self.weather_label.setAlignment(Qt.AlignCenter)
+        self.layout.addWidget(self.weather_label)
+
+        container = QWidget()
+        container.setLayout(self.layout)
+        self.setCentralWidget(container)
+
+    def get_weather(self):
+        city = self.city_input.text()
+        if not city:
+            QMessageBox.warning(self, "Input Error", "Please enter a city name.")
+            return
+
+        api_key = os.getenv("API_KEY")
+        if not api_key:
+            QMessageBox.critical(self, "Error", "Chave de API não encontrada no arquivo .env")
+            return
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+
+        try:
+            response = requests.get(url)
+            data = response.json()
+
+            if data["cod"] != 200:
+                QMessageBox.warning(self, "Error", f"Cidade não encontrada: {data['message']}")
+                return
+
+            temp = data["main"]["temp"]
+            feels_like = data["main"]["feels_like"]
+            humidity = data["main"]["humidity"]
+            self.weather_label.setText(f"Temperatura: {temp}°C\nSensação Térmica: {feels_like}°C\nUmidade: {humidity}%")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Ocorreu um erro: {str(e)}")
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = WeatherReport()
+    window.show()
+    sys.exit(app.exec_())
